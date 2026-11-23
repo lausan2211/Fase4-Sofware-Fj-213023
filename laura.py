@@ -1,0 +1,362 @@
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from datetime import datetime
+import logging
+from typing import Any
+
+
+# =====================================================================
+# 1. CONFIGURACIÓN DEL ARCHIVO DE LOGS (EVENTOS Y ERRORES)
+# =====================================================================
+def configurar_logger(nombre_archivo: str = "software_fj.log") -> logging.Logger:
+    """Configura un logger que escribe eventos y errores en un archivo de texto."""
+    logger = logging.getLogger("SoftwareFJLogger")
+    logger.setLevel(logging.INFO)
+
+    # Evita duplicar manejadores si se reconfigura en la misma ejecución
+    if not logger.handlers:
+        formato = logging.Formatter(
+            "%(asctime)s | %(levelname)s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        file_handler = logging.FileHandler(nombre_archivo, mode="a", encoding="utf-8")
+        file_handler.setFormatter(formato)
+        logger.addHandler(file_handler)
+
+    return logger
+
+
+logger = configurar_logger()
+
+
+# =====================================================================
+# 2. EXCEPCIONES PERSONALIZADAS
+# =====================================================================
+class SoftwareFJError(Exception):
+    """Excepción base para errores del sistema Software FJ."""
+
+    def _init_(self, mensaje: str, codigo: str = "ERR_GENERAL") -> None:
+        self.codigo = codigo
+        super()._init_(f"[{codigo}] {mensaje}")
+
+
+class ValidacionError(SoftwareFJError):
+    """Error lanzado cuando un dato o parámetro no cumple las reglas de validación."""
+
+    def _init_(self, mensaje: str) -> None:
+        super()._init_(mensaje, codigo="ERR_VALIDACION")
+
+
+class DisponibilidadError(SoftwareFJError):
+    """Error lanzado cuando un servicio no está disponible o presenta conflicto."""
+
+    def _init_(self, mensaje: str) -> None:
+        super()._init_(mensaje, codigo="ERR_DISPONIBILIDAD")
+
+
+class ReservaError(SoftwareFJError):
+    """Error lanzado durante el ciclo de vida o procesamiento de una reserva."""
+
+    def _init_(self, mensaje: str) -> None:
+        super()._init_(mensaje, codigo="ERR_RESERVA")
+
+
+class CalculoError(SoftwareFJError):
+    """Error lanzado cuando ocurre un cálculo inconsistente o inválido."""
+
+    def _init_(self, mensaje: str) -> None:
+        super()._init_(mensaje, codigo="ERR_CALCULO")
+
+
+# =====================================================================
+# 3. CLASE ABSTRACTA BASE PARA ENTIDADES DEL SISTEMA
+# =====================================================================
+class EntidadSistema(ABC):
+    """Clase abstracta que representa entidades generales de Software FJ."""
+
+    def _init_(self, id_entidad: str) -> None:
+        if not isinstance(id_entidad, str) or not id_entidad.strip():
+            raise ValidacionError("El identificador de la entidad no puede estar vacío.")
+        self._id_entidad: str = id_entidad.strip().upper()
+        self._fecha_creacion: datetime = datetime.now()
+
+    @property
+    def id_entidad(self) -> str:
+        return self._id_entidad
+
+    @property
+    def fecha_creacion(self) -> datetime:
+        return self._fecha_creacion
+
+    @abstractmethod
+    def resumen(self) -> str:
+        """Retorna un resumen legible de la entidad."""
+
+
+# =====================================================================
+# 4. CLASE CLIENTE (ENCAPSULACIÓN Y VALIDACIONES ESTRICTAS)
+# =====================================================================
+class Cliente(EntidadSistema):
+    """Representa un cliente con datos personales encapsulados y validados."""
+
+    def _init_(self, id_cliente: str, nombre: str, correo: str, telefono: str) -> None:
+        super()._init_(id_cliente)
+        self.nombre = nombre
+        self.correo = correo
+        self.telefono = telefono
+
+    @property
+    def nombre(self) -> str:
+        return self._nombre
+
+    @nombre.setter
+    def nombre(self, valor: str) -> None:
+        if not isinstance(valor, str) or len(valor.strip()) < 3:
+            raise ValidacionError("El nombre del cliente debe tener al menos 3 caracteres.")
+        self._nombre = valor.strip()
+
+    @property
+    def correo(self) -> str:
+        return self._correo
+
+    @correo.setter
+    def correo(self, valor: str) -> None:
+        if not isinstance(valor, str) or "@" not in valor or "." not in valor.split("@")[-1]:
+            raise ValidacionError(f"Correo electrónico inválido: '{valor}'.")
+        self._correo = valor.strip().lower()
+
+    @property
+    def telefono(self) -> str:
+        return self._telefono
+
+    @telefono.setter
+    def telefono(self, valor: str) -> None:
+        limpio = valor.strip() if isinstance(valor, str) else ""
+        if not limpio.isdigit() or not (7 <= len(limpio) <= 15):
+            raise ValidacionError(
+                "El teléfono debe contener solo dígitos y tener entre 7 y 15 caracteres."
+            )
+        self._telefono = limpio
+
+    def resumen(self) -> str:
+        return (
+            f"Cliente[{self.id_entidad}] {self.nombre} | "
+            f"Correo: {self.correo} | Tel: {self.telefono}"
+        )
+
+
+# =====================================================================
+# 5. CLASE ABSTRACTA SERVICIO Y SERVICIOS ESPECIALIZADOS (POLIMORFISMO)
+# =====================================================================
+class Servicio(EntidadSistema, ABC):
+    """Clase abstracta para los servicios ofrecidos por Software FJ."""
+
+    def _init_(
+        self,
+        id_servicio: str,
+        nombre: str,
+        tarifa_base: float,
+        disponible: bool = True,
+    ) -> None:
+        super()._init_(id_servicio)
+        self.nombre = nombre
+        self.tarifa_base = tarifa_base
+        self.disponible = disponible
+
+    @property
+    def nombre(self) -> str:
+        return self._nombre
+
+    @nombre.setter
+    def nombre(self, valor: str) -> None:
+        if not isinstance(valor, str) or len(valor.strip()) < 3:
+            raise ValidacionError("El nombre del servicio debe tener al menos 3 caracteres.")
+        self._nombre = valor.strip()
+
+    @property
+    def tarifa_base(self) -> float:
+        return self._tarifa_base
+
+    @tarifa_base.setter
+    def tarifa_base(self, valor: float) -> None:
+        try:
+            monto = float(valor)
+        except (TypeError, ValueError) as exc:
+            raise ValidacionError("La tarifa base debe ser numérica.") from exc
+        if monto <= 0:
+            raise CalculoError("La tarifa base del servicio debe ser mayor que cero.")
+        self._tarifa_base = monto
+
+    @property
+    def disponible(self) -> bool:
+        return self._disponible
+
+    @disponible.setter
+    def disponible(self, estado: bool) -> None:
+        if not isinstance(estado, bool):
+            raise ValidacionError("La disponibilidad debe ser un valor booleano (True/False).")
+        self._disponible = estado
+
+    @abstractmethod
+    def validar_parametros(self, duracion_horas: int, **kwargs: Any) -> None:
+        """Valida parámetros específicos de duración y opciones del servicio."""
+
+    @abstractmethod
+    def calcular_costo_base(self, duracion_horas: int, **kwargs: Any) -> float:
+        """Calcula el costo base según la duración y tipo de servicio."""
+
+    @abstractmethod
+    def describir_servicio(self) -> str:
+        """Describe las características particulares del servicio."""
+
+    # Simulación de sobrecarga de métodos mediante parámetros opcionales y args/*kwargs
+    def calcular_costo(
+        self,
+        duracion_horas: int,
+        *ajustes_adicionales: float,
+        descuento_pct: float = 0.0,
+        impuesto_pct: float = 0.19,
+        **kwargs: Any,
+    ) -> float:
+        """
+        Variante flexible del cálculo de costos (soporta argumentos posicionales
+        adicionales, descuento porcentual, impuesto porcentual y opciones extra).
+        """
+        self.validar_parametros(duracion_horas, **kwargs)
+
+        if not (0.0 <= descuento_pct < 100.0):
+            raise CalculoError("El descuento porcentual debe estar entre 0 y 99.9.")
+        if impuesto_pct < 0.0:
+            raise CalculoError("El impuesto porcentual no puede ser negativo.")
+
+        subtotal = self.calcular_costo_base(duracion_horas, **kwargs)
+
+        for ajuste in ajustes_adicionales:
+            try:
+                valor_ajuste = float(ajuste)
+            except (TypeError, ValueError) as exc:
+                raise CalculoError("Los ajustes adicionales deben ser numéricos.") from exc
+            subtotal += valor_ajuste
+
+        if subtotal <= 0:
+            raise CalculoError("El subtotal calculado no puede ser menor o igual a cero.")
+
+        con_descuento = subtotal * (1.0 - descuento_pct / 100.0)
+        total = con_descuento * (1.0 + impuesto_pct)
+        return round(total, 2)
+
+    def resumen(self) -> str:
+        estado_txt = "Disponible" if self.disponible else "No disponible"
+        return (
+            f"Servicio[{self.id_entidad}] {self.nombre} | "
+            f"Tarifa base: ${self.tarifa_base:,.2f} | {estado_txt}"
+        )
+
+
+class ReservaSala(Servicio):
+    """Servicio especializado para reserva de salas de reuniones o conferencias."""
+
+    def _init_(
+        self,
+        id_servicio: str,
+        nombre: str,
+        tarifa_base: float,
+        capacidad_personas: int,
+        disponible: bool = True,
+    ) -> None:
+        super()._init_(id_servicio, nombre, tarifa_base, disponible)
+        if not isinstance(capacidad_personas, int) or capacidad_personas <= 0:
+            raise ValidacionError("La capacidad de la sala debe ser un entero positivo.")
+        self.capacidad_personas = capacidad_personas
+
+    def validar_parametros(self, duracion_horas: int, **kwargs: Any) -> None:
+        if not isinstance(duracion_horas, int) or not (1 <= duracion_horas <= 24):
+            raise ValidacionError(
+                "La duración de reserva de sala debe ser un entero entre 1 y 24 horas."
+            )
+        asistentes = kwargs.get("asistentes")
+        if asistentes is not None:
+            if not isinstance(asistentes, int) or asistentes <= 0:
+                raise ValidacionError("El número de asistentes debe ser un entero positivo.")
+            if asistentes > self.capacidad_personas:
+                raise DisponibilidadError(
+                    f"Los asistentes ({asistentes}) exceden la capacidad de la sala "
+                    f"({self.capacidad_personas})."
+                )
+
+    def calcular_costo_base(self, duracion_horas: int, **kwargs: Any) -> float:
+        # A partir de 4 horas se aplica un pequeño recargo logístico de sala
+        recargo_extendido = 15.0 if duracion_horas >= 4 else 0.0
+        return (self.tarifa_base * duracion_horas) + recargo_extendido
+
+    def describir_servicio(self) -> str:
+        return (
+            f"Reserva de Sala '{self.nombre}' (Capacidad: {self.capacidad_personas} personas)."
+        )
+
+
+class AlquilerEquipo(Servicio):
+    """Servicio especializado para alquiler de equipos tecnológicos."""
+
+    def _init_(
+        self,
+        id_servicio: str,
+        nombre: str,
+        tarifa_base: float,
+        cantidad_unidades: int,
+        disponible: bool = True,
+    ) -> None:
+        super()._init_(id_servicio, nombre, tarifa_base, disponible)
+        if not isinstance(cantidad_unidades, int) or cantidad_unidades <= 0:
+            raise ValidacionError("La cantidad de unidades debe ser un entero positivo.")
+        self.cantidad_unidades = cantidad_unidades
+
+    def validar_parametros(self, duracion_horas: int, **kwargs: Any) -> None:
+        if not isinstance(duracion_horas, int) or not (1 <= duracion_horas <= 72):
+            raise ValidacionError(
+                "El alquiler de equipos debe durar entre 1 y 72 horas."
+            )
+        unidades = kwargs.get("unidades", 1)
+        if not isinstance(unidades, int) or unidades <= 0:
+            raise ValidacionError("Las unidades solicitadas deben ser un entero positivo.")
+        if unidades > self.cantidad_unidades:
+            raise DisponibilidadError(
+                f"Unidades solicitadas ({unidades}) superan el stock ({self.cantidad_unidades})."
+            )
+
+    def calcular_costo_base(self, duracion_horas: int, **kwargs: Any) -> float:
+        unidades = int(kwargs.get("unidades", 1))
+        return self.tarifa_base * duracion_horas * unidades
+
+    def describir_servicio(self) -> str:
+        return (
+            f"Alquiler de Equipo '{self.nombre}' (Stock disponible: {self.cantidad_unidades} uds.)."
+        )
+class AsesoriaEspecializada(Servicio):
+    """Servicio especializado para asesorías técnicas o de arquitectura de software."""
+
+    def __init__(
+        self,
+        id_servicio: str,
+        nombre: str,
+        tarifa_base: float,
+        especialidad: str,
+        disponible: bool = True,
+    ) -> None:
+        super().__init__(id_servicio, nombre, tarifa_base, disponible)
+        if not isinstance(especialidad, str) or len(especialidad.strip()) < 3:
+            raise ValidacionError("La especialidad de la asesoría no es válida.")
+        self.especialidad = especialidad.strip()
+
+    def validar_parametros(self, duracion_horas: int, **kwargs: Any) -> None:
+        if not isinstance(duracion_horas, int) or not (1 <= duracion_horas <= 12):
+            raise ValidacionError(
+                "Una sesión de asesoría especializada debe durar entre 1 y 12 horas."
+            )
+
+    def calcular_costo_base(self, duracion_horas: int, **kwargs: Any) -> float:
+        return self.tarifa_base * duracion_horas
+
+    def describir_servicio(self) -> str:
+        return f"Asesoría Especializada '{self.nombre}' en {self.especialidad}."
